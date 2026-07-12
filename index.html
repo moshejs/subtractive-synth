@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>How a synth makes sound — The Lab</title>
+  <meta name="description" content="A playable in-browser subtractive synthesizer. Watch an oscillator get carved by a filter, shaped by an envelope, and thrown into a room — with a live oscilloscope and spectrum. Zero dependencies." />
+  <link rel="stylesheet" href="lab.css" />
+  <style>
+    /* exhibit accent */
+    :root { --accent: #c07cff; --accent-soft: #3a2b52; --accent-ink: #140a1f; }
+
+    /* ---- interactive shell ---- */
+    .synthpanel { padding: 20px; }
+    @media (max-width: 720px) { .synthpanel { padding: 14px; } }
+
+    /* signal-chain strip */
+    .chain { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+    .chain .node {
+      flex: 1 1 0; min-width: 116px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      border-radius: 12px; padding: 10px 12px;
+    }
+    .chain .node .t {
+      font-family: var(--mono); font-size: 10px; letter-spacing: .14em;
+      text-transform: uppercase; color: var(--ink-mute);
+    }
+    .chain .node .v { font-size: 13px; color: var(--ink); margin-top: 4px; font-variant-numeric: tabular-nums; line-height: 1.35; }
+    .chain .arrow { align-self: center; color: var(--ink-faint); font-size: 16px; flex: 0 0 auto; }
+    @media (max-width: 760px) { .chain .arrow { display: none; } .chain .node { flex: 1 1 44%; } }
+
+    /* visualisers */
+    .scopes { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+    @media (max-width: 720px) { .scopes { grid-template-columns: 1fr; } }
+    .scopebox {
+      position: relative; background: #06070c;
+      border: 1px solid var(--line); border-radius: 12px;
+      padding: 9px 11px 8px;
+    }
+    .scopelab {
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: var(--mono); font-size: 10px; letter-spacing: .13em;
+      text-transform: uppercase; color: var(--ink-mute); margin-bottom: 4px;
+    }
+    .scopelab .live { color: var(--accent); display: inline-flex; align-items: center; gap: 6px; }
+    .scopelab .live::before {
+      content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent);
+    }
+    .scopes canvas { display: block; width: 100%; height: 150px; }
+    @media (max-width: 720px) { .scopes canvas { height: 128px; } }
+
+    /* click-to-enable overlay, sits above both scopes */
+    .enable {
+      position: absolute; inset: 0; z-index: 4; cursor: pointer;
+      display: grid; place-items: center; border-radius: 12px;
+      background: color-mix(in oklab, var(--bg) 58%, transparent);
+      backdrop-filter: blur(2px);
+    }
+    .enable .pill {
+      font-family: var(--mono); font-size: 13px; color: var(--ink);
+      background: var(--surface-2); border: 1px solid var(--accent);
+      padding: 11px 18px; border-radius: 999px;
+      box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 16%, transparent);
+      animation: enpulse 1.9s ease-in-out infinite;
+    }
+    @keyframes enpulse {
+      0%, 100% { box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 16%, transparent); }
+      50%      { box-shadow: 0 0 0 9px color-mix(in oklab, var(--accent) 4%, transparent); }
+    }
+
+    /* control clusters */
+    .synth-controls { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin-bottom: 20px; }
+    .synth-controls .btn.primary { margin-left: auto; }
+    @media (max-width: 520px) { .synth-controls .btn.primary { margin-left: 0; width: 100%; justify-content: center; } }
+
+    /* slider grid */
+    .sliders { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px 22px; margin-bottom: 22px; }
+    @media (max-width: 860px) { .sliders { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 460px) { .sliders { grid-template-columns: 1fr 1fr; gap: 14px 16px; } }
+    .slider .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .slider label {
+      font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--ink-mute);
+    }
+    .slider .val { font-family: var(--mono); font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+    /* keyboard */
+    .kbrow { margin-top: 6px; }
+    .keyboard {
+      position: relative; width: 100%; height: 168px;
+      background: var(--surface-2); border: 1px solid var(--line);
+      border-radius: 12px; padding: 8px; touch-action: none; user-select: none;
+      -webkit-user-select: none;
+    }
+    @media (max-width: 720px) { .keyboard { height: 138px; } }
+    .key {
+      position: absolute; top: 8px; box-sizing: border-box; cursor: pointer;
+      display: flex; align-items: flex-end; justify-content: center;
+      transition: background .05s ease, box-shadow .05s ease;
+    }
+    .key.white {
+      height: calc(100% - 16px);
+      background: linear-gradient(180deg, #f6f7fb, #e7eaf1);
+      border: 1px solid #c3c9d6; border-top: none;
+      border-radius: 0 0 7px 7px; color: #6b7180; z-index: 1;
+    }
+    .key.black {
+      height: 62%;
+      background: linear-gradient(180deg, #2b303c, #10131b);
+      border: 1px solid #05070c; border-top: none;
+      border-radius: 0 0 6px 6px; color: #aeb6c6; z-index: 2;
+      box-shadow: 0 3px 6px rgba(0,0,0,.55);
+    }
+    .key .lab { font-family: var(--mono); font-size: 11px; padding-bottom: 9px; pointer-events: none; text-transform: uppercase; }
+    .key.black .lab { padding-bottom: 7px; font-size: 10px; }
+    .key.on {
+      background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+      box-shadow: 0 0 16px color-mix(in oklab, var(--accent) 55%, transparent);
+    }
+
+    .kbfoot { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; justify-content: space-between; margin-top: 12px; }
+    .kbfoot .hint { font-size: 13px; color: var(--ink-mute); margin: 0; flex: 1 1 260px; }
+    .kbfoot .hint b { color: var(--ink-soft); }
+    .octctl { display: inline-flex; align-items: center; gap: 8px; }
+    .octctl .btn { padding: 8px 12px; }
+    .btn:disabled { opacity: .5; cursor: default; }
+  </style>
+</head>
+<body>
+  <nav class="labnav">
+    <div class="wrap">
+      <a class="brand" href="https://github.com/moshejs"><span class="dot"></span> The Lab</a>
+      <span class="spacer"></span>
+      <a class="navlink" href="https://github.com/moshejs/subtractive-synth">Source ↗</a>
+    </div>
+  </nav>
+
+  <header class="exhead wrap">
+    <span class="eyebrow">Exhibit 02 · Sound synthesis</span>
+    <h1 class="title">How a synth makes sound</h1>
+    <p class="dek">Start with a raw electrical buzz, then carve it, shape it, and drop it into a room — live, in your browser, one key at a time.</p>
+  </header>
+
+  <main class="wrap">
+    <div class="metastrip">
+      <span><b>Web Audio</b> API, no samples</span>
+      <span><b>Subtractive</b> synthesis</span>
+      <span><b>Polyphonic</b> — hold a chord</span>
+      <span><b>0</b> dependencies</span>
+    </div>
+
+    <section class="read prose stack">
+      <p>A synthesizer doesn't record sound — it <strong>builds</strong> it from scratch. A single oscillator produces a harsh, harmonic-rich buzz, and then everything downstream is about <em>taking things away</em> until what's left is a bell, a bass, a string, or a warm evening pad. That's subtractive synthesis, and it's the backbone of nearly every synth you've ever heard.</p>
+      <p>Below is a real one, wired up with the Web Audio API — oscillator, filter, envelope, and reverb, with a live oscilloscope and spectrum so you can <em>see</em> the sound the moment you make it. Play it with your computer keyboard, twist the knobs, and watch the picture change.</p>
+    </section>
+
+    <!-- ============ THE INTERACTIVE ============ -->
+    <section style="margin: 34px 0 10px;">
+      <div class="panel synthpanel">
+
+        <!-- signal chain -->
+        <div class="chain" aria-label="Signal chain">
+          <div class="node"><div class="t">1 · Oscillator</div><div class="v" id="chain-osc">Sawtooth · oct 4</div></div>
+          <span class="arrow">→</span>
+          <div class="node"><div class="t">2 · Lowpass filter</div><div class="v" id="chain-filter">Lowpass 8.0 kHz · Q 2.0</div></div>
+          <span class="arrow">→</span>
+          <div class="node"><div class="t">3 · Amp envelope</div><div class="v" id="chain-env">A 5 ms · S 75% · R 250 ms</div></div>
+          <span class="arrow">→</span>
+          <div class="node"><div class="t">4 · Space</div><div class="v" id="chain-space">Reverb 12%</div></div>
+          <span class="arrow">→</span>
+          <div class="node"><div class="t">5 · Output</div><div class="v" id="chain-out">Your speakers</div></div>
+        </div>
+
+        <!-- visualisers -->
+        <div class="scopes">
+          <div class="scopebox">
+            <div class="scopelab"><span>Oscilloscope · waveform</span><span class="live">live</span></div>
+            <canvas id="scope" width="600" height="150" aria-label="Live oscilloscope"></canvas>
+          </div>
+          <div class="scopebox">
+            <div class="scopelab"><span>Spectrum · harmonics</span><span class="live">live</span></div>
+            <canvas id="spectrum" width="600" height="150" aria-label="Live frequency spectrum"></canvas>
+          </div>
+          <div class="enable" id="enable" role="button" tabindex="0" aria-label="Click to enable sound">
+            <span class="pill">🔊 Click to enable sound</span>
+          </div>
+        </div>
+
+        <!-- top controls -->
+        <div class="synth-controls">
+          <div class="field">
+            <label>Waveform</label>
+            <div class="chips" id="waves" role="group" aria-label="Oscillator waveform">
+              <span class="chip" data-wave="sine" role="button" aria-pressed="false">Sine</span>
+              <span class="chip" data-wave="sawtooth" role="button" aria-pressed="true">Saw</span>
+              <span class="chip" data-wave="square" role="button" aria-pressed="false">Square</span>
+              <span class="chip" data-wave="triangle" role="button" aria-pressed="false">Triangle</span>
+            </div>
+          </div>
+          <div class="field">
+            <label>Presets</label>
+            <div class="chips" id="presets" role="group" aria-label="Sound presets">
+              <span class="chip" data-preset="saw" role="button" aria-pressed="true">Bright saw</span>
+              <span class="chip" data-preset="pad" role="button" aria-pressed="false">Warm pad</span>
+              <span class="chip" data-preset="pluck" role="button" aria-pressed="false">Pluck</span>
+              <span class="chip" data-preset="bass" role="button" aria-pressed="false">Bass</span>
+            </div>
+          </div>
+          <button class="btn primary" id="sculpt">✨ Sculpt a pad</button>
+        </div>
+
+        <!-- sliders -->
+        <div class="sliders">
+          <div class="field slider">
+            <div class="top"><label for="cutoff">Cutoff</label><span class="val" id="cutoff-val">8.0 kHz</span></div>
+            <input id="cutoff" type="range" min="0" max="1" step="0.001" value="0.94" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="resonance">Resonance · Q</label><span class="val" id="resonance-val">2.0</span></div>
+            <input id="resonance" type="range" min="0" max="20" step="0.1" value="2" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="attack">Attack</label><span class="val" id="attack-val">5 ms</span></div>
+            <input id="attack" type="range" min="0.001" max="2" step="0.001" value="0.005" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="decay">Decay</label><span class="val" id="decay-val">150 ms</span></div>
+            <input id="decay" type="range" min="0.001" max="2" step="0.001" value="0.15" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="sustain">Sustain</label><span class="val" id="sustain-val">75%</span></div>
+            <input id="sustain" type="range" min="0" max="1" step="0.01" value="0.75" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="release">Release</label><span class="val" id="release-val">250 ms</span></div>
+            <input id="release" type="range" min="0.005" max="3" step="0.005" value="0.25" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="space">Space</label><span class="val" id="space-val">12%</span></div>
+            <input id="space" type="range" min="0" max="1" step="0.01" value="0.12" />
+          </div>
+          <div class="field slider">
+            <div class="top"><label for="master">Volume</label><span class="val" id="master-val">80%</span></div>
+            <input id="master" type="range" min="0" max="1" step="0.01" value="0.8" />
+          </div>
+        </div>
+
+        <!-- keyboard -->
+        <div class="kbrow">
+          <div class="keyboard" id="keyboard" aria-label="Playable keyboard"></div>
+        </div>
+        <div class="kbfoot">
+          <p class="hint">Play with your keyboard — <b>a s d f g h j k</b> are the white keys, <b>w e t y u</b> the black ones. <b>z</b> / <b>x</b> shift octave. Or tap the keys.</p>
+          <div class="octctl">
+            <button class="btn ghost" id="oct-down" aria-label="Octave down">− oct</button>
+            <span class="readout">Octave <b id="oct-val">4</b></span>
+            <button class="btn ghost" id="oct-up" aria-label="Octave up">oct +</button>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ============ THE EXPLAINER ============ -->
+    <section class="read prose stack" style="margin-top: 46px;">
+      <h2>It starts with a shape</h2>
+      <p>Every note begins as an <strong>oscillator</strong> — a circuit that swings back and forth at some frequency. Play an A and it swings 440 times a second. But <em>how</em> it swings decides the timbre, and that's the first thing to try above: flip between the four waveforms while holding a key and watch the oscilloscope.</p>
+      <p>A <strong>sine</strong> is the purest possible tone — a single frequency, one clean curve, nothing else. It sounds soft and flute-like, almost boring. A <strong>sawtooth</strong> looks like a shark's fin and sounds bright and buzzy, because that ramp shape is secretly a whole stack of frequencies at once: the fundamental plus every harmonic above it, piled up. The <strong>square</strong> is hollow and reedy (odd harmonics only); the <strong>triangle</strong> sits in between, mellow but with a little edge. The spectrum on the right is the giveaway — the sine shows one lonely bar, the sawtooth shows a comb of them marching off toward the high end. <em>Bright</em> literally means <em>more harmonics</em>.</p>
+
+      <h2>Subtractive synthesis: carving with a filter</h2>
+      <p>So a sawtooth hands you far too much — a rich, harsh spray of harmonics. The trick of subtractive synthesis is to start with that surplus and <strong>take away</strong> what you don't want. The tool is a <strong>lowpass filter</strong>: it lets low frequencies pass through and progressively muffles everything above a chosen <strong>cutoff</strong> frequency.</p>
+      <p>Hold a bright sawtooth and slowly drag the <strong>Cutoff</strong> slider down. You'll hear the sound go from buzzy to warm to muffled, and on the spectrum you'll literally watch the tall forest of high harmonics get mowed down from the right — the dashed line marks where the filter starts cutting. That single knob is the most expressive control on the whole instrument. It's the "wah" in a wah pedal and the slow bloom at the start of a thousand dance tracks.</p>
+
+      <h2>Resonance: a spotlight at the cutoff</h2>
+      <p>Turn up <strong>Resonance</strong> and the filter stops being polite. Instead of a gentle roll-off, it boosts the frequencies right <em>at</em> the cutoff point, creating a sharp peak — you can see it as a little spike travelling along the spectrum as you sweep the cutoff. Crank it far enough and the filter nearly whistles on its own. Resonance is what gives acid basslines their squelch and vocal-ish synths their "ee"/"oo" vowels: you're emphasizing one narrow band and sweeping it around.</p>
+
+      <h2>ADSR: the shape of loudness over time</h2>
+      <p>A real note isn't just on or off. Pluck a string and it's loud instantly, then fades. Bow it and the sound swells in. That envelope of loudness over time has four stages — <strong>Attack</strong> (how fast it reaches full volume), <strong>Decay</strong> (how fast it drops to a holding level), <strong>Sustain</strong> (that holding level, for as long as you keep the key down), and <strong>Release</strong> (how long the tail rings out after you let go).</p>
+      <p>Short attack and zero sustain give you a percussive <strong>pluck</strong>. Long attack and long release give you a pad that breathes in and hangs in the air. Set Attack to its slowest and hold a chord — the notes fade in like a sunrise instead of stabbing at you. Nothing about the frequencies changed; only their <em>volume over time</em> did, and it completely transforms the feel.</p>
+
+      <h2>Reverb: putting it in a room</h2>
+      <p>The last stage answers a simple question: where is this sound happening? Dry, in a padded booth, or at the far end of a cathedral? The <strong>Space</strong> knob feeds the signal through a reverb — thousands of tiny reflections, generated here on the fly as a decaying burst of noise — so the note keeps ringing after it should have stopped. A touch adds depth; a lot turns even a short pluck into a slow, cavernous wash.</p>
+      <p>That's the whole chain: <strong>a shape, carved by a filter, shaped by an envelope, placed in a room.</strong> Every patch on every synth is some recipe of those four moves. Now go make a few of your own.</p>
+    </section>
+
+    <section class="read" style="margin-top: 40px;">
+      <div class="panel" style="padding: 20px 22px;">
+        <div class="mono" style="font-size: 12.5px; color: var(--ink-mute); letter-spacing: .12em; margin-bottom: 8px;">TRY THIS</div>
+        <div class="prose" style="color: var(--ink-soft)">
+          Hit <b>✨ Sculpt a pad</b> and just watch: a bright, buzzy chord blooms open, the cutoff closes, reverb floods in, and every knob slides to its new home — a warm pad in a second and a half. Then hold your own chord and do it by hand: sawtooth, drop the cutoff, crank Attack and Release, add a little Space.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="labfoot">
+    <div class="wrap">
+      <span>The Lab — handmade interactive explainers.</span>
+      <span class="spacer" style="flex:1"></span>
+      <a href="https://github.com/moshejs/subtractive-synth">Source ↗</a>
+    </div>
+  </footer>
+
+  <script src="synth.js"></script>
+</body>
+</html>
