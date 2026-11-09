@@ -1,5 +1,7 @@
 # How a synth makes sound
 
+> **Archived.** This project moved into Digital Instruments: https://digital-instruments.quentin.software/subtractive-synth/
+
 Start with a raw electrical buzz, then carve it, shape it, and drop it into a room —
 live, in your browser, one key at a time.
 
